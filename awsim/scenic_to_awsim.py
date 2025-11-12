@@ -1,0 +1,1 @@
+#main script that converts scenic outputs into AWsim compatible config
