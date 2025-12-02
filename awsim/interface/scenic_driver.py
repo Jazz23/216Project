@@ -34,12 +34,22 @@ def load_scenic_scene(filename: str = "minimal.scenic"):
 
 # Register all Scenic objects in the AwsimSimulator (Graeme: you will extend this once AWSIM/ROS2 is connected.)
 def register_scene_objects(sim: AwsimSimulator, scene) -> None:
-    # For now we just assign keys "obj0", "obj1", ... with "obj0" treated as ego, later we can use Scenic object names or properties if needed 
+    # For now we just assign keys "obj0", "obj1", ... with "obj0" treated as ego, later we can use Scenic object names or properties if needed
     print("[ScenicDriver] Registering Scenic objects with AwsimSimulator")
     for idx, obj in enumerate(scene.objects):
         key = "ego" if idx == 0 else f"npc{idx}"
         sim.register_object(key, kind="vehicle")
-        print(f"  - Scenic object {idx} mapped to key '{key}', pos={obj.position}")
+        handle = sim.objects[key]
+        pos = obj.position   # usually something like (x, y) or (x, y, z)
+        handle.x = float(pos[0])
+        handle.y = float(pos[1])
+        handle.heading = float(obj.heading)
+        handle.speed = float(getattr(obj, "speed", 0.0))
+        print(
+            f"  - Scenic object {idx} mapped to key '{key}', "
+            f"pos=({handle.x:.2f}, {handle.y:.2f}), "
+            f"heading={handle.heading:.1f} deg"
+        )
 
 # Very simple hardcoded control policy for testing; ego: some throttle and a gentle steer, others: low throttle, straight
 def simple_control_policy(step_index: int) -> Dict[str, Dict[str, float]]:
