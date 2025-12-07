@@ -1,4 +1,4 @@
-# AWSIM Subdirectory -- Scenic Integration
+# AWSIM Subdirectory - Scenic Integration
 
 This README documents only the `awsim/` subdirectory, which contains
 the full Scenic → AWSIM mock integration used in the CSE 216 project.
