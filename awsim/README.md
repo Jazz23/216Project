@@ -88,7 +88,7 @@ You should see:
 -   Step-by-step ego vehicle state updates
 -   Clean object removal and simulator shutdown
 
-<img src="images/216DemoOuput.png" width="850"/>
+<img src="awsim/images/216DemoOuput.png" width="850"/>
 
 ------------------------------------------------------------------------
 
