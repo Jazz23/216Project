@@ -203,9 +203,8 @@ This `awsim/` folder serves as:
 ## 10. Academic Usage
 
 This subsystem supports:
-
--   **CSE 216 final project**
 -   Research into:
+
     -   Simulation-driven testing
     -   Formal + generative scenario validation
     -   Autonomy system robustness
