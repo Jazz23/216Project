@@ -4,7 +4,7 @@ This README documents only the `awsim/` subdirectory, which contains
 the full Scenic → AWSIM mock integration used in the CSE 216 project.
 
 You do **not** need the rest of the repository to run this
-prototype---only the `awsim/` folder and Python with Scenic installed.
+prototype, only the `awsim/` folder and Python with Scenic installed.
 
 ------------------------------------------------------------------------
 
@@ -88,6 +88,8 @@ You should see:
 -   Step-by-step ego vehicle state updates
 -   Clean object removal and simulator shutdown
 
+<img src="images/216DemoOuput.png" width="850"/>
+
 ------------------------------------------------------------------------
 
 ## 6. Tests
@@ -140,7 +142,7 @@ Stores:
 
 -   ID + type:
     -   `scenic_name`, `awsim_id`, `kind`
--   Kinematic state:
+-   Information for state:
     -   `x`, `y`, `z`, `heading_deg`, `speed`
 -   Control state:
     -   `throttle`, `steering`
