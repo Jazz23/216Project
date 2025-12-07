@@ -1,176 +1,137 @@
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict
-
+import math
+import rclpy
 from rclpy.node import Node
 
-from autoware_control_msgs.msg import Control           # ✓ valid import
+from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
-from builtin_interfaces.msg import Time
 
 
-# ------------------------------
-#  Awsim Object Handle
-# ------------------------------
-@dataclass
 class AwsimObjectHandle:
-    scenic_name: str
-    awsim_id: str
-    kind: str
+    """Represents a Scenic object mapped into AWSim."""
+    def __init__(self, scenic_name, awsim_id, kind="vehicle"):
+        self.scenic_name = scenic_name
+        self.awsim_id = awsim_id
+        self.kind = kind
+        self.throttle = 0.0
+        self.steering = 0.0
 
-    # local desired control inputs (not state)
-    throttle: float = 0.0
-    steering: float = 0.0
+    def __repr__(self):
+        return (f"AwsimObjectHandle(scenic_name='{self.scenic_name}', "
+                f"awsim_id='{self.awsim_id}', kind='{self.kind}')")
 
 
-# ------------------------------
-#  Awsim Simulator Node
-# ------------------------------
 class AwsimSimulator(Node):
+    """Bridge between Scenic and AWSim via ROS2."""
 
     def __init__(self):
         super().__init__("awsim_scenic_interface")
 
-        self.objects: Dict[str, AwsimObjectHandle] = {}
+        # Publishers for Autoware/AWSim control inputs
+        self.control_pub = self.create_publisher(
+            Control, "/control/command/control_cmd", 10
+        )
+        self.gear_pub = self.create_publisher(
+            GearCommand, "/control/command/gear_cmd", 10
+        )
 
-        # -------------------------
-        # REAL AWSIM control topics
-        # -------------------------
-        self.control_pub = self.create_publisher(Control, "/control/command/control_cmd", 10)
-        self.gear_pub = self.create_publisher(GearCommand, "/control/command/gear_cmd", 10)
-
-        # Send DRIVE gear once
-        gear = GearCommand()
-        gear.command = GearCommand.DRIVE
-        self.gear_pub.publish(gear)
+        # Internal object storage
+        self.objects = {}
+        self._counter = 0
 
         self.get_logger().info("AwsimSimulator ready (control publishers online).")
 
-
-    # ------------------------------
-    # Register a new Scenic object
-    # ------------------------------
-    def register_object(self, key: str, kind: str = "vehicle"):
-        if key in self.objects:
-            raise ValueError(f"Object '{key}' already exists.")
-
-        # CHANGED — no dummy state, AWSim is authoritative
-        awsim_id = f"awsim_{key}"
-
-        handle = AwsimObjectHandle(
-            scenic_name=key,
-            awsim_id=awsim_id,
-            kind=kind
-        )
-
-        self.objects[key] = handle
-        print(f"[AwsimSimulator] Registered object '{key}' as {handle}")
-
-
-    # ------------------------------
-    # Remove object
-    # ------------------------------
-    def remove_object(self, key: str):
-        handle = self.objects.pop(key, None)
-        if handle is None:
-            print(f"[AwsimSimulator] Tried to remove unknown object '{key}'")
-            return
-
-        print(f"[AwsimSimulator] Removed object '{key}' (awsim_id={handle.awsim_id})")
-
-
-    # ------------------------------
-    # STEP — Option C: ONLY publish control inputs
-    # ------------------------------
-    def step(self, dt: float, controls: Dict[str, Dict[str, float]]):
-        """
-        dt ignored — AWSim is authoritative.
-        Scenic provides throttle/steering.
-        """
-
-        for key, ctrl in controls.items():
-            if key not in self.objects:
-                print(f"[AwsimSimulator] Warning: unknown object '{key}'")
-                continue
-
-            # Get control inputs
-            throttle = float(ctrl.get("throttle", 0.0))
-            steering = float(ctrl.get("steer", 0.0))
-
-            self.apply_controls(key, throttle, steering)
-
-        # CHANGED — We no longer simulate state; only publish commands
-        for obj in self.objects.values():
-            self._publish_control(obj)
-
-
-    # ------------------------------
-    # Publish appropriate Autoware control messages
-    # ------------------------------
-    def _publish_control(self, obj: AwsimObjectHandle):
-
-        # Only ego receives /control/command messages
-        if obj.scenic_name != "ego":
-            return
-
-        MAX_SPEED = 6.0  # scale Scenic throttle to AWSIM velocity
-
-        cmd = Control()
-        now = self.get_clock().now().to_msg()
-        cmd.stamp = now
-
-        # FIXED — assign correct fields for Control message
-        cmd.longitudinal.velocity = obj.throttle * MAX_SPEED
-        cmd.longitudinal.acceleration = 0.0
-        cmd.lateral.steering_tire_angle = obj.steering
-
-        self.control_pub.publish(cmd)
+    # -------------------------------------------------------
+    # Scenic compatibility: register object from Scenic Scene
+    # -------------------------------------------------------
+    def register_object(self, name, kind="vehicle"):
+        awsim_id = f"awsim_{name}"
+        handle = AwsimObjectHandle(name, awsim_id, kind)
+        self.objects[name] = handle
 
         self.get_logger().info(
-            f"[CONTROL] ego vel={cmd.longitudinal.velocity:.2f} "
-            f"steer={cmd.lateral.steering_tire_angle:.2f}"
+            f"[AwsimSimulator] Registered object '{name}' as {handle}"
+        )
+        return handle
+
+    # -------------------------------------------------------
+    # Control Application
+    # -------------------------------------------------------
+    def apply_controls(self, name, throttle, steering):
+        """Publish throttle/steering for the given object."""
+        if name not in self.objects:
+            raise KeyError(f"No object named '{name}' registered.")
+
+        handle = self.objects[name]
+        handle.throttle = throttle
+        handle.steering = steering
+
+        # Prepare ROS2 control message
+        msg = Control()
+        msg.longitudinal.velocity = throttle * 6.0  # simple scaling
+        msg.lateral.steering_tire_angle = steering
+
+        # Publish autoware control command
+        self.control_pub.publish(msg)
+
+        self.get_logger().info(
+            f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
+            f"steer={steering:.2f}"
         )
 
-
-    # ------------------------------
-    # Update desired control inputs
-    # ------------------------------
-    def apply_controls(self, name: str, throttle: float, steering: float):
-        if name not in self.objects:
-            raise ValueError(f"Unknown object '{name}'")
-
-        obj = self.objects[name]
-        obj.throttle = throttle
-        obj.steering = steering
-
-
-    # ------------------------------
-    # Query AWSIM state (placeholder)
-    # ------------------------------
-    def get_object_state(self, key: str):
+    # -------------------------------------------------------
+    # Simulation Step (Scenic expects this hook)
+    # -------------------------------------------------------
+    def step(self, dt, controls):
         """
-        AWSim should be queried through ROS2 topics.
-        Scenic should NOT simulate state.
+        Scenic calls this once per timestep.
+        We simply publish controls to AWSim.
         """
-        if key not in self.objects:
-            raise ValueError(f"Unknown object '{key}'")
+        for name, ctrl in controls.items():
+            throttle = ctrl.get("throttle", 0.0)
+            steer = ctrl.get("steer", 0.0)
+            self.apply_controls(name, throttle, steer)
 
+        return {}  # Scenic expects a dict
+
+    # -------------------------------------------------------
+    # Scenic createSimulation() — patched stub
+    # -------------------------------------------------------
+    def createSimulation(self, scene, **kwargs):
+        """
+        Scenic expects a Simulation-like object. We return a harmless
+        dummy simulation that Scenic will not use to advance physics.
+        """
+
+        class DummySimulation:
+            def __init__(self, scene):
+                self.scene = scene
+                self.timestep = 0.1
+
+            def step(self):
+                # Scenic behavior engines will not call this when using AWSim as external simulator
+                return {}
+
+        return DummySimulation(scene)
+
+    # -------------------------------------------------------
+    # Scenic convenience API
+    # -------------------------------------------------------
+    def get_object_state(self, name):
+        """Return dummy state (since AWSim is authoritative)."""
         return {
-            "awsim_id": self.objects[key].awsim_id,
-            "kind": self.objects[key].kind,
-            "note": "AWSim authoritative; state not simulated here."
+            "awsim_id": self.objects[name].awsim_id,
+            "kind": self.objects[name].kind,
+            "note": "AWSim authoritative; state not simulated here.",
         }
 
-
-    def get_all_states(self):
-        return {k: self.get_object_state(k) for k in self.objects}
-
-
-    # ------------------------------
-    # Shutdown
-    # ------------------------------
-    def shutdown(self):
-        for key in list(self.objects.keys()):
-            self.remove_object(key)
-
-        print("[AwsimSimulator] Shutdown complete")
+    # -------------------------------------------------------
+    # Cleanup
+    # -------------------------------------------------------
+    def destroy(self):
+        """Explicit cleanup."""
+        for name in list(self.objects.keys()):
+            handle = self.objects[name]
+            self.get_logger().info(
+                f"[AwsimSimulator] Removed object '{name}' (awsim_id={handle.awsim_id})"
+            )
+        self.objects.clear()
