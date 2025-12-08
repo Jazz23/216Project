@@ -43,8 +43,8 @@ def generate_controls(scene):
     ego = scene.objects[0]
 
     controls[ego.name] = {
-        "throttle": 0.3,
-        "steer": 0.05,
+        "throttle": 2.5,
+        "steer": 0.0,
     }
     return controls
 
@@ -58,6 +58,9 @@ def run_minimal_demo():
     scene, scenario = load_scenic_scene("minimal.scenic")
 
     sim = AwsimSimulator()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(sim)
+
     register_scenic_objects(sim, scene)
 
     dt = 0.1
@@ -65,6 +68,7 @@ def run_minimal_demo():
     print(f"[ScenicDriver] Running demo for {steps} steps (dt={dt})")
 
     for step in range(steps):
+        executor.spin_once(timeout_sec=0)
         controls = generate_controls(scene)
         sim.step(dt, controls)
 

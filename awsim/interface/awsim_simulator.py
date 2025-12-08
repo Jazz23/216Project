@@ -1,10 +1,28 @@
 import math
+import time
+import os
+import subprocess
+import rclpy
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
+from rosgraph_msgs.msg import Clock
+from builtin_interfaces.msg import Time
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
 
+def run_ros2_cmd(cmd: str):
+    """Run a ros2 command as a subprocess."""
+    print(f"[ROS2 CMD] {cmd}")
+    process = subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+    return process
 
 class AwsimObjectHandle:
     """Represents a Scenic object mapped into AWSim."""
@@ -22,17 +40,44 @@ class AwsimObjectHandle:
 
 class AwsimSimulator(Node):
     """Bridge between Scenic and AWSim via ROS2."""
+    def _clock_callback(self, msg: Clock):
+        self.sim_time = msg.clock
+
+    def _now(self):
+        return self.sim_time
 
     def __init__(self):
         super().__init__("awsim_scenic_interface")
+        self.sim_time = Time(sec=0, nanosec =0)
+
+        cmd_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
 
         # Publishers for Autoware/AWSim control inputs
         self.control_pub = self.create_publisher(
-            Control, "/control/command/control_cmd", 10
+            Control, "/control/command/control_cmd", cmd_qos
         )
         self.gear_pub = self.create_publisher(
-            GearCommand, "/control/command/gear_cmd", 10
+            GearCommand, "/control/command/gear_cmd", cmd_qos
         )
+        self.create_subscription(
+            Clock,
+            "/clock",
+            self._clock_callback,
+            10
+        )
+
+        while rclpy.ok() and self.sim_time.sec == 0:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        
+        gear = GearCommand()
+        gear.command = GearCommand.DRIVE
+        gear.stamp = self._now()
+        self.gear_pub.publish(gear)
 
         # Internal object storage
         self.objects = {}
@@ -57,7 +102,6 @@ class AwsimSimulator(Node):
     # Control Application
     # -------------------------------------------------------
     def apply_controls(self, name, throttle, steering):
-        """Publish throttle/steering for the given object."""
         if name not in self.objects:
             raise KeyError(f"No object named '{name}' registered.")
 
@@ -65,18 +109,31 @@ class AwsimSimulator(Node):
         handle.throttle = throttle
         handle.steering = steering
 
-        # Prepare ROS2 control message
         msg = Control()
-        msg.longitudinal.velocity = throttle * 6.0  # simple scaling
-        msg.lateral.steering_tire_angle = steering
+        msg.stamp = self._now()
 
-        # Publish autoware control command
+        # LATERAL -------------------------------
+        msg.lateral.steering_tire_angle = steering
+        msg.lateral.is_defined_steering_tire_rotation_rate = False
+
+        # LONGITUDINAL --------------------------
+        # 🔧 Scenic throttle → Autoware velocity
+        msg.longitudinal.velocity = float(throttle)
+
+        # 🔧 REQUIRED to make AWSim move
+        msg.longitudinal.acceleration = 1.0
+        msg.longitudinal.is_defined_acceleration = True
+
+        msg.longitudinal.jerk = 0.0
+        msg.longitudinal.is_defined_jerk = False
+
         self.control_pub.publish(msg)
 
         self.get_logger().info(
             f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
             f"steer={steering:.2f}"
         )
+
 
     # -------------------------------------------------------
     # Simulation Step (Scenic expects this hook)
