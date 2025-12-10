@@ -54,16 +54,17 @@ def generate_controls(scene, scenario):
     scenic_accel = scenario.params.get("egoAccel", 0.0)
 
     # Scenic heading is in degrees; AWSim expects a steering tire angle in radians.
-    heading_deg = float(ego.heading)
+    heading_deg = float(scenario.params.get("egoSteer", 0.0))
     heading_rad = math.radians(heading_deg)
 
     # For now, we keep steering simple (straight); you can add behavior later.
-    steer = 0.0
+    steer = heading_deg
 
     controls = {
         ego.name: {
             "throttle": scenic_speed,  # interpreted as speed in AwsimSimulator
             "steer": steer,
+            "accel": scenic_accel,
         }
     }
 

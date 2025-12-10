@@ -129,16 +129,16 @@ class AwsimSimulator(Node):
         # - If Scenic provided an explicit acceleration (egoAccel), use it.
         # - Otherwise, retain the old behavior (accel=1.0 when moving, 0 when stopped),
         #   which we already know makes AWSim move.
-        if acceleration is None:
-            if throttle != 0.0:
-                accel = 1.0
-            else:
-                accel = 0.0
-        else:
-            accel = float(acceleration)
+        # if acceleration is None:
+        #     if throttle != 0.0:
+        #         accel = 1.0
+        #     else:
+        #         accel = 0.0
+        # else:
+        accel = float(acceleration)
 
         msg.longitudinal.acceleration = accel
-        msg.longitudinal.is_defined_acceleration = True  # must be True for AWSim to obey
+        msg.longitudinal.is_defined_acceleration = False
 
         msg.longitudinal.jerk = 0.0
         msg.longitudinal.is_defined_jerk = False
@@ -161,7 +161,6 @@ class AwsimSimulator(Node):
         `controls` is a dict mapping object name → { "throttle", "steer", "accel"? }.
         """
         for name, ctrl in controls.items():
-            self.get_logger().info(f"[LOOKIE HERE] {ctrl}")
             throttle = ctrl.get("throttle", 0.0)
             steer = ctrl.get("steer", 0.0)
             accel = ctrl.get("accel", None)
