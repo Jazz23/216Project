@@ -1,4 +1,5 @@
 import rclpy
+import math
 from scenic import scenarioFromFile
 from awsim.interface.awsim_simulator import AwsimSimulator
 
@@ -38,14 +39,28 @@ def register_scenic_objects(sim: AwsimSimulator, scene):
 # (placeholder until Scenic behaviors are added)
 # -------------------------------------------------------
 def generate_controls(scene):
-    """Simple fixed control policy. Later replaced with Scenic behaviors."""
-    controls = {}
+    """Generate controls from Scenic objects."""
+
     ego = scene.objects[0]
 
-    controls[ego.name] = {
-        "throttle": 2.5,
-        "steer": 0.0,
+    # Read scenic-defined speed (default to 0 if missing)
+    scenic_speed = getattr(scene.params, "egoSpeed", 0.0)
+
+    # Scenic heading is in degrees; AWSim expects steering angle in radians (small values)
+    heading_deg = float(ego.heading)
+    heading_rad = math.radians(heading_deg)
+
+    # Convert scenic heading into a very small steering correction:
+    # (AWSim steering = tire angle, not heading)
+    steer = 0.0  # eventually map Scenic behavior → steering
+
+    controls = {
+        ego.name: {
+            "throttle": scenic_speed,
+            "steer": steer,
+        }
     }
+
     return controls
 
 
@@ -68,13 +83,12 @@ def run_minimal_demo():
     print(f"[ScenicDriver] Running demo for {steps} steps (dt={dt})")
 
     for step in range(steps):
-        executor.spin_once(timeout_sec=0)
         controls = generate_controls(scene)
         sim.step(dt, controls)
 
         ego_name = scene.objects[0].name
-        state = sim.get_object_state(ego_name)
-        print(f"[ScenicDriver] Step {step}: ego_state={state}")
+        # state = sim.get_object_state(ego_name)
+        # print(f"[ScenicDriver] Step {step}: ego_state={state}")
 
     sim.destroy()
     print("[ScenicDriver] Demo complete")

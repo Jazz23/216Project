@@ -1,9 +1,3 @@
-import math
-import time
-import os
-import subprocess
-import rclpy
-import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
@@ -11,18 +5,6 @@ from rosgraph_msgs.msg import Clock
 from builtin_interfaces.msg import Time
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
-
-def run_ros2_cmd(cmd: str):
-    """Run a ros2 command as a subprocess."""
-    print(f"[ROS2 CMD] {cmd}")
-    process = subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
-    return process
 
 class AwsimObjectHandle:
     """Represents a Scenic object mapped into AWSim."""
@@ -40,12 +22,6 @@ class AwsimObjectHandle:
 
 class AwsimSimulator(Node):
     """Bridge between Scenic and AWSim via ROS2."""
-    def _clock_callback(self, msg: Clock):
-        self.sim_time = msg.clock
-
-    def _now(self):
-        return self.sim_time
-
     def __init__(self):
         super().__init__("awsim_scenic_interface")
         self.sim_time = Time(sec=0, nanosec =0)
@@ -65,15 +41,9 @@ class AwsimSimulator(Node):
             GearCommand, "/control/command/gear_cmd", cmd_qos
         )
         self.create_subscription(
-            Clock,
-            "/clock",
-            self._clock_callback,
-            10
+            Clock, "/clock", self._clock_callback, 10
         )
 
-        while rclpy.ok() and self.sim_time.sec == 0:
-            rclpy.spin_once(self, timeout_sec=0.1)
-        
         gear = GearCommand()
         gear.command = GearCommand.DRIVE
         gear.stamp = self._now()
@@ -84,6 +54,12 @@ class AwsimSimulator(Node):
         self._counter = 0
 
         self.get_logger().info("AwsimSimulator ready (control publishers online).")
+
+    def _clock_callback(self, msg: Clock):
+        self.sim_time = msg.clock
+
+    def _now(self):
+        return self.sim_time
 
     # -------------------------------------------------------
     # Scenic compatibility: register object from Scenic Scene
@@ -113,7 +89,7 @@ class AwsimSimulator(Node):
         msg.stamp = self._now()
 
         # LATERAL -------------------------------
-        msg.lateral.steering_tire_angle = steering
+        msg.lateral.steering_tire_angle = float(steering)
         msg.lateral.is_defined_steering_tire_rotation_rate = False
 
         # LONGITUDINAL --------------------------
