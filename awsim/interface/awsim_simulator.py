@@ -6,31 +6,39 @@ from builtin_interfaces.msg import Time
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand
 
+
 class AwsimObjectHandle:
     """Represents a Scenic object mapped into AWSim."""
+
     def __init__(self, scenic_name, awsim_id, kind="vehicle"):
         self.scenic_name = scenic_name
         self.awsim_id = awsim_id
         self.kind = kind
-        self.throttle = 0.0
+        # These are just “last command” values, not a real state
+        self.throttle = 0.0   # interpreted as desired speed (m/s)
         self.steering = 0.0
 
     def __repr__(self):
-        return (f"AwsimObjectHandle(scenic_name='{self.scenic_name}', "
-                f"awsim_id='{self.awsim_id}', kind='{self.kind}')")
+        return (
+            f"AwsimObjectHandle(scenic_name='{self.scenic_name}', "
+            f"awsim_id='{self.awsim_id}', kind='{self.kind}')"
+        )
 
 
 class AwsimSimulator(Node):
     """Bridge between Scenic and AWSim via ROS2."""
+
     def __init__(self):
         super().__init__("awsim_scenic_interface")
-        self.sim_time = Time(sec=0, nanosec =0)
+
+        # Sim time from /clock (simulated time)
+        self.sim_time = Time(sec=0, nanosec=0)
 
         cmd_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1
+            depth=1,
         )
 
         # Publishers for Autoware/AWSim control inputs
@@ -40,10 +48,11 @@ class AwsimSimulator(Node):
         self.gear_pub = self.create_publisher(
             GearCommand, "/control/command/gear_cmd", cmd_qos
         )
-        self.create_subscription(
-            Clock, "/clock", self._clock_callback, 10
-        )
 
+        # Subscribe to /clock so we can time-stamp messages correctly
+        self.create_subscription(Clock, "/clock", self._clock_callback, 10)
+
+        # Immediately put the vehicle into DRIVE
         gear = GearCommand()
         gear.command = GearCommand.DRIVE
         gear.stamp = self._now()
@@ -55,10 +64,14 @@ class AwsimSimulator(Node):
 
         self.get_logger().info("AwsimSimulator ready (control publishers online).")
 
+    # -------------------------------------------------------
+    # Time handling
+    # -------------------------------------------------------
     def _clock_callback(self, msg: Clock):
         self.sim_time = msg.clock
 
     def _now(self):
+        # Use simulation time from AWSim
         return self.sim_time
 
     # -------------------------------------------------------
@@ -77,13 +90,29 @@ class AwsimSimulator(Node):
     # -------------------------------------------------------
     # Control Application
     # -------------------------------------------------------
-    def apply_controls(self, name, throttle, steering):
+    def apply_controls(self, name, throttle, steering, acceleration=None):
+        """
+        Apply controls for a Scenic object.
+
+        Parameters
+        ----------
+        name : str
+            Scenic object name (e.g., "ego").
+        throttle : float
+            Interpreted as desired *speed* from Scenic (e.g., scene.params.egoSpeed).
+            Units should match what AWSim expects (m/s).
+        steering : float
+            Steering tire angle (radians).
+        acceleration : float | None
+            Optional acceleration command from Scenic (e.g., scene.params.egoAccel).
+            If None, we use a default that preserves previous behavior.
+        """
         if name not in self.objects:
             raise KeyError(f"No object named '{name}' registered.")
 
         handle = self.objects[name]
-        handle.throttle = throttle
-        handle.steering = steering
+        handle.throttle = float(throttle)
+        handle.steering = float(steering)
 
         msg = Control()
         msg.stamp = self._now()
@@ -93,12 +122,23 @@ class AwsimSimulator(Node):
         msg.lateral.is_defined_steering_tire_rotation_rate = False
 
         # LONGITUDINAL --------------------------
-        # 🔧 Scenic throttle → Autoware velocity
+        # Scenic "throttle" is really desired speed from the scenario
         msg.longitudinal.velocity = float(throttle)
 
-        # 🔧 REQUIRED to make AWSim move
-        msg.longitudinal.acceleration = 1.0
-        msg.longitudinal.is_defined_acceleration = True
+        # Acceleration:
+        # - If Scenic provided an explicit acceleration (egoAccel), use it.
+        # - Otherwise, retain the old behavior (accel=1.0 when moving, 0 when stopped),
+        #   which we already know makes AWSim move.
+        if acceleration is None:
+            if throttle != 0.0:
+                accel = 1.0
+            else:
+                accel = 0.0
+        else:
+            accel = float(acceleration)
+
+        msg.longitudinal.acceleration = accel
+        msg.longitudinal.is_defined_acceleration = True  # must be True for AWSim to obey
 
         msg.longitudinal.jerk = 0.0
         msg.longitudinal.is_defined_jerk = False
@@ -107,9 +147,8 @@ class AwsimSimulator(Node):
 
         self.get_logger().info(
             f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
-            f"steer={steering:.2f}"
+            f"accel={msg.longitudinal.acceleration:.2f} steer={steering:.2f}"
         )
-
 
     # -------------------------------------------------------
     # Simulation Step (Scenic expects this hook)
@@ -118,11 +157,15 @@ class AwsimSimulator(Node):
         """
         Scenic calls this once per timestep.
         We simply publish controls to AWSim.
+
+        `controls` is a dict mapping object name → { "throttle", "steer", "accel"? }.
         """
         for name, ctrl in controls.items():
+            self.get_logger().info(f"[LOOKIE HERE] {ctrl}")
             throttle = ctrl.get("throttle", 0.0)
             steer = ctrl.get("steer", 0.0)
-            self.apply_controls(name, throttle, steer)
+            accel = ctrl.get("accel", None)
+            self.apply_controls(name, throttle, steer, accel)
 
         return {}  # Scenic expects a dict
 

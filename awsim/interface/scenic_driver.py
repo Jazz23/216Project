@@ -25,7 +25,7 @@ def register_scenic_objects(sim: AwsimSimulator, scene):
     for i, obj in enumerate(scene.objects):
         name = getattr(obj, "name", f"obj{i}")
 
-        handle = sim.register_object(name)
+        sim.register_object(name)
 
         print(
             f"  - Scenic object {i} mapped to key '{name}', "
@@ -36,30 +36,42 @@ def register_scenic_objects(sim: AwsimSimulator, scene):
 
 # -------------------------------------------------------
 # Generate control commands each step
-# (placeholder until Scenic behaviors are added)
 # -------------------------------------------------------
-def generate_controls(scene):
-    """Generate controls from Scenic objects."""
+def generate_controls(scene, scenario):
+    """
+    Generate controls from Scenic objects.
 
+    Uses Scenic parameters:
+      - egoSpeed : desired speed for the ego (m/s)
+      - egoAccel : optional desired acceleration for the ego (m/s^2)
+    """
     ego = scene.objects[0]
 
-    # Read scenic-defined speed (default to 0 if missing)
-    scenic_speed = getattr(scene.params, "egoSpeed", 0.0)
+    # Scenic-defined speed (default 0 if missing)
+    scenic_speed = scenario.params.get("egoSpeed", 0.0)
 
-    # Scenic heading is in degrees; AWSim expects steering angle in radians (small values)
+    # Optional Scenic-defined acceleration
+    scenic_accel = scenario.params.get("egoAccel", 0.0)
+
+    # Scenic heading is in degrees; AWSim expects a steering tire angle in radians.
     heading_deg = float(ego.heading)
     heading_rad = math.radians(heading_deg)
 
-    # Convert scenic heading into a very small steering correction:
-    # (AWSim steering = tire angle, not heading)
-    steer = 0.0  # eventually map Scenic behavior → steering
+    # For now, we keep steering simple (straight); you can add behavior later.
+    steer = 0.0
 
     controls = {
         ego.name: {
-            "throttle": scenic_speed,
+            "throttle": scenic_speed,  # interpreted as speed in AwsimSimulator
             "steer": steer,
         }
     }
+
+    # Only include 'accel' if Scenic actually provided egoAccel
+    if scenic_accel is not None:
+        controls[ego.name]["accel"] = scenic_accel
+
+    print(f"[LOOKIE HERE] {controls}")
 
     return controls
 
@@ -83,7 +95,7 @@ def run_minimal_demo():
     print(f"[ScenicDriver] Running demo for {steps} steps (dt={dt})")
 
     for step in range(steps):
-        controls = generate_controls(scene)
+        controls = generate_controls(scene, scenario)
         sim.step(dt, controls)
 
         ego_name = scene.objects[0].name
