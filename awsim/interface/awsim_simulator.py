@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 from rosgraph_msgs.msg import Clock
 from builtin_interfaces.msg import Time
 from autoware_control_msgs.msg import Control
-from autoware_vehicle_msgs.msg import GearCommand
+from autoware_vehicle_msgs.msg import GearCommand, VelocityReport
 
 
 class AwsimObjectHandle:
@@ -49,6 +49,22 @@ class AwsimSimulator(Node):
             GearCommand, "/control/command/gear_cmd", cmd_qos
         )
 
+        vel_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+
+        self._last_velocity_report: VelocityReport | None = None
+
+        self.velocity_sub = self.create_subscription(
+            VelocityReport,
+            "/vehicle/status/velocity_status",
+            self._velocity_status_callback,
+            vel_qos,
+        )
+
         # Subscribe to /clock so we can time-stamp messages correctly
         self.create_subscription(Clock, "/clock", self._clock_callback, 10)
 
@@ -73,6 +89,45 @@ class AwsimSimulator(Node):
     def _now(self):
         # Use simulation time from AWSim
         return self.sim_time
+
+    # -------------------------------------------------------
+    # Velocity status subscription
+    # -------------------------------------------------------
+    def _velocity_status_callback(self, msg: VelocityReport) -> None:
+        """Callback for /vehicle/status/velocity_status."""
+        self._last_velocity_report = msg
+        print(f'{self._last_velocity_report}')
+        # Optional debug:
+        # self.get_logger().info(
+        #     f"[AwsimSimulator] Velocity update: "
+        #     f"longitudinal={msg.longitudinal_velocity:.2f}, "
+        #     f"lateral={msg.lateral_velocity:.2f}, "
+        #     f"heading_rate={msg.heading_rate:.2f}"
+        # )
+
+    def get_current_velocity(self):
+        """Return the most recent velocity as a simple dict.
+
+        {
+            "longitudinal": float m/s,
+            "lateral":      float m/s,
+            "heading_rate": float rad/s
+        }
+        """
+        if self._last_velocity_report is None:
+            return {
+                "longitudinal": 0.0,
+                "lateral": 0.0,
+                "heading_rate": 0.0,
+            }
+
+        rep = self._last_velocity_report
+        return {
+            "longitudinal": rep.longitudinal_velocity,
+            "lateral": rep.lateral_velocity,
+            "heading_rate": rep.heading_rate,
+        }
+
 
     # -------------------------------------------------------
     # Scenic compatibility: register object from Scenic Scene

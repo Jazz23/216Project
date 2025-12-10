@@ -72,8 +72,6 @@ def generate_controls(scene, scenario):
     if scenic_accel is not None:
         controls[ego.name]["accel"] = scenic_accel
 
-    print(f"[LOOKIE HERE] {controls}")
-
     return controls
 
 
