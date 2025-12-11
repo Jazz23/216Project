@@ -1,5 +1,5 @@
+import time
 import rclpy
-import math
 from scenic import scenarioFromFile
 from awsim.interface.awsim_simulator import AwsimSimulator
 
@@ -14,7 +14,6 @@ def load_scenic_scene(filename):
 
     print(f"[ScenicDriver] Scene generated in {iterations} iterations.")
     return scene, scenario
-
 
 # -------------------------------------------------------
 # Register Scenic objects into AWSim
@@ -33,7 +32,6 @@ def register_scenic_objects(sim: AwsimSimulator, scene):
             f"heading={obj.heading:.1f} deg"
         )
 
-
 # -------------------------------------------------------
 # Generate control commands each step
 # -------------------------------------------------------
@@ -43,37 +41,29 @@ def generate_controls(scene, scenario):
 
     Uses Scenic parameters:
       - egoSpeed : desired speed for the ego (m/s)
-      - egoAccel : optional desired acceleration for the ego (m/s^2)
+      - egoAccel : desired acceleration for the ego (m/s^2)
+      - egoSteer : desired turn angle (negative value is a right turn)
     """
     ego = scene.objects[0]
 
     # Scenic-defined speed (default 0 if missing)
     scenic_speed = scenario.params.get("egoSpeed", 0.0)
 
-    # Optional Scenic-defined acceleration
+    # cenic-defined acceleration
     scenic_accel = scenario.params.get("egoAccel", 0.0)
 
     # Scenic heading is in degrees; AWSim expects a steering tire angle in radians.
-    heading_deg = float(scenario.params.get("egoSteer", 0.0))
-    heading_rad = math.radians(heading_deg)
-
-    # For now, we keep steering simple (straight); you can add behavior later.
-    steer = heading_deg
+    steer = float(scenario.params.get("egoSteer", 0.0))
 
     controls = {
         ego.name: {
-            "throttle": scenic_speed,  # interpreted as speed in AwsimSimulator
+            "throttle": scenic_speed,
             "steer": steer,
             "accel": scenic_accel,
         }
     }
 
-    # Only include 'accel' if Scenic actually provided egoAccel
-    if scenic_accel is not None:
-        controls[ego.name]["accel"] = scenic_accel
-
     return controls
-
 
 # -------------------------------------------------------
 # Main demonstration run
@@ -90,21 +80,23 @@ def run_minimal_demo():
     register_scenic_objects(sim, scene)
 
     dt = 0.1
-    steps = 5
+    steps = 5  # parameter for number of iterations of scenic behavior to run
+    time.sleep(2)
     print(f"[ScenicDriver] Running demo for {steps} steps (dt={dt})")
 
     for step in range(steps):
+        executor.spin_once(timeout_sec=0.1)
         controls = generate_controls(scene, scenario)
         sim.step(dt, controls)
 
+        time.sleep(0.1)
         ego_name = scene.objects[0].name
-        # state = sim.get_object_state(ego_name)
-        # print(f"[ScenicDriver] Step {step}: ego_state={state}")
+        state = sim.get_object_state(ego_name)
+        print(f"[ScenicDriver] Step {step}: ego_state={state}")
 
     sim.destroy()
     print("[ScenicDriver] Demo complete")
     rclpy.shutdown()
-
 
 if __name__ == "__main__":
     run_minimal_demo()

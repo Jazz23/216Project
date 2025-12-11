@@ -5,6 +5,7 @@ from rosgraph_msgs.msg import Clock
 from builtin_interfaces.msg import Time
 from autoware_control_msgs.msg import Control
 from autoware_vehicle_msgs.msg import GearCommand, VelocityReport
+from geometry_msgs.msg import PoseStamped
 
 
 class AwsimObjectHandle:
@@ -14,7 +15,6 @@ class AwsimObjectHandle:
         self.scenic_name = scenic_name
         self.awsim_id = awsim_id
         self.kind = kind
-        # These are just “last command” values, not a real state
         self.throttle = 0.0   # interpreted as desired speed (m/s)
         self.steering = 0.0
 
@@ -27,7 +27,6 @@ class AwsimObjectHandle:
 
 class AwsimSimulator(Node):
     """Bridge between Scenic and AWSim via ROS2."""
-
     def __init__(self):
         super().__init__("awsim_scenic_interface")
 
@@ -56,13 +55,27 @@ class AwsimSimulator(Node):
             history=HistoryPolicy.KEEP_LAST,
         )
 
+        # Subscribers for AWSim ego Velocity
         self._last_velocity_report: VelocityReport | None = None
-
         self.velocity_sub = self.create_subscription(
             VelocityReport,
             "/vehicle/status/velocity_status",
             self._velocity_status_callback,
             vel_qos,
+        )
+
+        pose_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE
+        )
+
+        # Subscribers for AWSim ego position
+        self.pose_sub = self.create_subscription(
+            PoseStamped,
+            "/sensing/gnss/pose",
+            self._pose_callback,
+            pose_qos
         )
 
         # Subscribe to /clock so we can time-stamp messages correctly
@@ -96,14 +109,6 @@ class AwsimSimulator(Node):
     def _velocity_status_callback(self, msg: VelocityReport) -> None:
         """Callback for /vehicle/status/velocity_status."""
         self._last_velocity_report = msg
-        print(f'{self._last_velocity_report}')
-        # Optional debug:
-        # self.get_logger().info(
-        #     f"[AwsimSimulator] Velocity update: "
-        #     f"longitudinal={msg.longitudinal_velocity:.2f}, "
-        #     f"lateral={msg.lateral_velocity:.2f}, "
-        #     f"heading_rate={msg.heading_rate:.2f}"
-        # )
 
     def get_current_velocity(self):
         """Return the most recent velocity as a simple dict.
@@ -128,6 +133,33 @@ class AwsimSimulator(Node):
             "heading_rate": rep.heading_rate,
         }
 
+    # -------------------------------------------------------
+    # Pose subscription
+    # -------------------------------------------------------
+ 
+    def _pose_callback(self, msg):
+        """Callback for /sensing/gnss/pose"""
+        self._last_pose = msg
+
+    def get_current_pose(self):
+        """Return the latest known vehicle position and orientation from GNSS pose."""
+        if not hasattr(self, "_last_pose") or self._last_pose is None:
+            return None
+        
+        msg = self._last_pose
+
+        if hasattr(msg, "pose"):
+            pose = msg.pose
+        else:
+            pose = msg
+
+        return {
+            "position": {
+                "x": pose.position.x,
+                "y": pose.position.y,
+                "z": pose.position.z,
+            }
+        }
 
     # -------------------------------------------------------
     # Scenic compatibility: register object from Scenic Scene
@@ -172,7 +204,7 @@ class AwsimSimulator(Node):
         msg = Control()
         msg.stamp = self._now()
 
-        # LATERAL -------------------------------
+        # LATERAL (steering) --------------------
         msg.lateral.steering_tire_angle = float(steering)
         msg.lateral.is_defined_steering_tire_rotation_rate = False
 
@@ -180,16 +212,6 @@ class AwsimSimulator(Node):
         # Scenic "throttle" is really desired speed from the scenario
         msg.longitudinal.velocity = float(throttle)
 
-        # Acceleration:
-        # - If Scenic provided an explicit acceleration (egoAccel), use it.
-        # - Otherwise, retain the old behavior (accel=1.0 when moving, 0 when stopped),
-        #   which we already know makes AWSim move.
-        # if acceleration is None:
-        #     if throttle != 0.0:
-        #         accel = 1.0
-        #     else:
-        #         accel = 0.0
-        # else:
         accel = float(acceleration)
 
         msg.longitudinal.acceleration = accel
@@ -200,10 +222,10 @@ class AwsimSimulator(Node):
 
         self.control_pub.publish(msg)
 
-        self.get_logger().info(
-            f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
-            f"accel={msg.longitudinal.acceleration:.2f} steer={steering:.2f}"
-        )
+        # self.get_logger().info(
+        #     f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
+        #     f"accel={msg.longitudinal.acceleration:.2f} steer={steering:.2f}"
+        # )
 
     # -------------------------------------------------------
     # Simulation Step (Scenic expects this hook)
@@ -224,34 +246,15 @@ class AwsimSimulator(Node):
         return {}  # Scenic expects a dict
 
     # -------------------------------------------------------
-    # Scenic createSimulation() — patched stub
-    # -------------------------------------------------------
-    def createSimulation(self, scene, **kwargs):
-        """
-        Scenic expects a Simulation-like object. We return a harmless
-        dummy simulation that Scenic will not use to advance physics.
-        """
-
-        class DummySimulation:
-            def __init__(self, scene):
-                self.scene = scene
-                self.timestep = 0.1
-
-            def step(self):
-                # Scenic behavior engines will not call this when using AWSim as external simulator
-                return {}
-
-        return DummySimulation(scene)
-
-    # -------------------------------------------------------
     # Scenic convenience API
     # -------------------------------------------------------
     def get_object_state(self, name):
-        """Return dummy state (since AWSim is authoritative)."""
+        """Return state from AWSim."""
         return {
             "awsim_id": self.objects[name].awsim_id,
             "kind": self.objects[name].kind,
-            "note": "AWSim authoritative; state not simulated here.",
+            "current_position": self.get_current_pose(),
+            "current_velocity": self.get_current_velocity(),
         }
 
     # -------------------------------------------------------
