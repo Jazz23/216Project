@@ -222,11 +222,6 @@ class AwsimSimulator(Node):
 
         self.control_pub.publish(msg)
 
-        # self.get_logger().info(
-        #     f"[CONTROL] {name} vel={msg.longitudinal.velocity:.2f} "
-        #     f"accel={msg.longitudinal.acceleration:.2f} steer={steering:.2f}"
-        # )
-
     # -------------------------------------------------------
     # Simulation Step (Scenic expects this hook)
     # -------------------------------------------------------
