@@ -1,86 +1,102 @@
-'''
-This is a placeholder for a Scenic to AWSIM driver used for early testing, tt does NOT implement true AWSIM communication but instead, it:
-- Loads a Scenic scenario file
-- Extracts a Scenic generated scene and objects
-- Registers those objects in AwsimSimulator (currently out)
-- Generates simple control inputs for testing (throttle/steer for ego)
-- Advances the Awesome simulator for a few time steps and prints dummy states
-
-Once Awesome/ros2 integration is available, this file will drive the real simulation loop and send real control commands to AWSIM every step.
-'''
-
-from __future__ import annotations
-from pathlib import Path
-from typing import Dict
+import time
+import rclpy
 from scenic import scenarioFromFile
 from awsim.interface.awsim_simulator import AwsimSimulator
 
-# Return the 216Project root (two levels above this file)
-def _project_root() -> Path:
-    return Path(__file__).resolve().parents[2]
 
-# Load a Scenic scenario from awsim/scenic_scenarios and generate a scene
-def load_scenic_scene(filename: str = "minimal.scenic"):
-    root = _project_root()
-    scenic_file = root / "awsim" / "scenic_scenarios" / filename
+# -------------------------------------------------------
+# Load Scenic and sample a scene
+# -------------------------------------------------------
+def load_scenic_scene(filename):
+    print("[ScenicDriver] Loading Scenic scenario...")
+    scenario = scenarioFromFile(f"awsim/scenic_scenarios/{filename}")
+    scene, iterations = scenario.generate()
 
-    if not scenic_file.exists():
-        raise FileNotFoundError(f"Scenic file not found: {scenic_file}")
+    print(f"[ScenicDriver] Scene generated in {iterations} iterations.")
+    return scene, scenario
 
-    print(f"[ScenicDriver] Loading Scenic scenario: {scenic_file}")
-    scenario = scenarioFromFile(str(scenic_file))
-    scene, _ = scenario.generate()
-    return scene
-
-# Register all Scenic objects in the AwsimSimulator (Graeme: you will extend this once AWSIM/ROS2 is connected.)
-def register_scene_objects(sim: AwsimSimulator, scene) -> None:
-    # For now we just assign keys "obj0", "obj1", ... with "obj0" treated as ego, later we can use Scenic object names or properties if needed
+# -------------------------------------------------------
+# Register Scenic objects into AWSim
+# -------------------------------------------------------
+def register_scenic_objects(sim: AwsimSimulator, scene):
     print("[ScenicDriver] Registering Scenic objects with AwsimSimulator")
-    for idx, obj in enumerate(scene.objects):
-        key = "ego" if idx == 0 else f"npc{idx}"
-        sim.register_object(key, kind="vehicle")
-        handle = sim.objects[key]
-        pos = obj.position   # usually something like (x, y) or (x, y, z)
-        handle.x = float(pos[0])
-        handle.y = float(pos[1])
-        handle.heading = float(obj.heading)
-        handle.speed = float(getattr(obj, "speed", 0.0))
+
+    for i, obj in enumerate(scene.objects):
+        name = getattr(obj, "name", f"obj{i}")
+
+        sim.register_object(name)
+
         print(
-            f"  - Scenic object {idx} mapped to key '{key}', "
-            f"pos=({handle.x:.2f}, {handle.y:.2f}), "
-            f"heading={handle.heading:.1f} deg"
+            f"  - Scenic object {i} mapped to key '{name}', "
+            f"pos=({obj.position.x:.2f}, {obj.position.y:.2f}), "
+            f"heading={obj.heading:.1f} deg"
         )
 
-# Very simple hardcoded control policy for testing; ego: some throttle and a gentle steer, others: low throttle, straight
-def simple_control_policy(step_index: int) -> Dict[str, Dict[str, float]]:
-    throttle_ego = 0.3
-    steer_ego = 0.05 if step_index < 10 else 0.0
+# -------------------------------------------------------
+# Generate control commands each step
+# -------------------------------------------------------
+def generate_controls(scene, scenario):
+    """
+    Generate controls from Scenic objects.
 
-    controls: Dict[str, Dict[str, float]] = {
-        "ego": {"throttle": throttle_ego, "steer": steer_ego},
-        # we won't explicitly control NPCs yet. You (Graeme) can extend this later.
+    Uses Scenic parameters:
+      - egoSpeed : desired speed for the ego (m/s)
+      - egoAccel : desired acceleration for the ego (m/s^2)
+      - egoSteer : desired turn angle (negative value is a right turn)
+    """
+    ego = scene.objects[0]
+
+    # Scenic-defined speed (default 0 if missing)
+    scenic_speed = scenario.params.get("egoSpeed", 0.0)
+
+    # cenic-defined acceleration
+    scenic_accel = scenario.params.get("egoAccel", 0.0)
+
+    # Scenic heading is in degrees; AWSim expects a steering tire angle in radians.
+    steer = float(scenario.params.get("egoSteer", 0.0))
+
+    controls = {
+        ego.name: {
+            "throttle": scenic_speed,
+            "steer": steer,
+            "accel": scenic_accel,
+        }
     }
+
     return controls
 
-# End-to-end demo: load Scenic scenario, create AwsimSimulator, register Scenic objects, run a few steps with dummy controls
-def run_minimal_demo(steps: int = 5, dt: float = 0.1) -> None:
-    scene = load_scenic_scene("minimal.scenic")
-    sim = AwsimSimulator(config={"source": "scenic_driver_demo"})
+# -------------------------------------------------------
+# Main demonstration run
+# -------------------------------------------------------
+def run_minimal_demo():
+    rclpy.init()
 
-    register_scene_objects(sim, scene)
+    scene, scenario = load_scenic_scene("minimal.scenic")
 
+    sim = AwsimSimulator()
+    executor = rclpy.executors.SingleThreadedExecutor()
+    executor.add_node(sim)
+
+    register_scenic_objects(sim, scene)
+
+    dt = 0.1
+    steps = 5  # parameter for number of iterations of scenic behavior to run
+    time.sleep(2)
     print(f"[ScenicDriver] Running demo for {steps} steps (dt={dt})")
-    for i in range(steps):
-        controls = simple_control_policy(i)
-        sim.step(dt=dt, controls=controls)
 
-        # Query ego state (currently dummy values until AWSIM is wired).
-        ego_state = sim.get_object_state("ego")
-        print(f"[ScenicDriver] Step {i}: ego_state={ego_state}")
+    for step in range(steps):
+        executor.spin_once(timeout_sec=0.1)
+        controls = generate_controls(scene, scenario)
+        sim.step(dt, controls)
 
-    sim.shutdown()
+        time.sleep(0.1)
+        ego_name = scene.objects[0].name
+        state = sim.get_object_state(ego_name)
+        print(f"[ScenicDriver] Step {step}: ego_state={state}")
+
+    sim.destroy()
     print("[ScenicDriver] Demo complete")
-
+    rclpy.shutdown()
 
 if __name__ == "__main__":
     run_minimal_demo()

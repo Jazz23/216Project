@@ -1,136 +1,265 @@
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict, Optional #leave optional in case we need it for later
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 
-@dataclass
-#
+from rosgraph_msgs.msg import Clock
+from builtin_interfaces.msg import Time
+from autoware_control_msgs.msg import Control
+from autoware_vehicle_msgs.msg import GearCommand, VelocityReport
+from geometry_msgs.msg import PoseStamped
+
+
 class AwsimObjectHandle:
-    def __init__(self, scenic_name: str, awsim_id: str, kind: str):
-        self. scenic_name = scenic_name
+    """Represents a Scenic object mapped into AWSim."""
+
+    def __init__(self, scenic_name, awsim_id, kind="vehicle"):
+        self.scenic_name = scenic_name
         self.awsim_id = awsim_id
         self.kind = kind
-        
-        self.x = 0.0
-        self.y = 0.0
-        self.heading = 0.0
-        self.speed = 0.0
+        self.throttle = 0.0   # interpreted as desired speed (m/s)
         self.steering = 0.0
-        self.throttle = 0.0
-        
+
     def __repr__(self):
-        return (f"AwsimObjectHandle(id={self.awsim_id}, kind={self.kind}, "
-                f"pos=({self.x}, {self.y}, {self.heading}), "
-                f"speed={self.speed})")
-    
-class AwsimSimulator:
-    # Initialize AWSIM simulator connection (Graeme: replace placeholders with real ROS2/AWSIM setup).
-    def __init__(self, config):
-        self.config: Dict[str, Any] = config or {}
-        self.objects: Dict[str, AwsimObjectHandle] = {}
-        self.state: Dict[str, Dict[str, float]] = {}
-        
-        # TO-DO(Graeme): initialize AWSIM / ROS2 connection here
-        print("[AwsimSimulator] Initialized with config:", self.config)
-        
-    # Stores object metadata (Graeme: create matching object in AWSIM)
-    def register_object(self, key: str, kind: str = "vehicle") -> None:
-        if key in self.objects:
-            raise ValueError(f"Object with key '{key}' is already registered.")
-
-        # TO-DO(Graeme): call into AWSIM to spawn the object and get its handle/id.
-        awsim_id = f"awsim_{key}"  # placeholder
-
-        handle = AwsimObjectHandle(
-            scenic_name=key,
-            awsim_id=awsim_id,
-            kind=kind,
+        return (
+            f"AwsimObjectHandle(scenic_name='{self.scenic_name}', "
+            f"awsim_id='{self.awsim_id}', kind='{self.kind}')"
         )
-        self.objects[key] = handle
-        print(f"[AwsimSimulator] Registered object '{key}' as {handle}")
-    
-    #Remove an object from AWSIM (Graeme: Despawn the matching object inside AWSIM.)
-    def remove_object(self, key: str) -> None:
-        handle = self.objects.pop(key, None)
-        if handle is None:
-            print(f"[AwsimSimulator] Tried to remove unknown object '{key}'")
-            return
 
-        # TO-DO(Graeme): despawn object in AWSIM.
-        print(f"[AwsimSimulator] Removed object '{key}' (awsim_id={handle.awsim_id})")
-    
-    # Advance AWSIM one time step (Graeme: Apply control commands (throttle, steering, braking) to AWSIM via ROS2)   
-    def step(self, dt: float, controls: Dict[str, Dict[str, float]]) -> None:
-        
-        # Part 1) We apply controls for each registered object.
-        for key, ctrl in controls.items():
-            if key not in self.objects:
-                print(f"[AwsimSimulator] Warning: control for unknown object '{key}'")
-                continue
 
-            handle = self.objects[key]
-            throttle = ctrl.get("throttle", 0.0)
-            steering = ctrl.get("steer", 0.0)
-            
-            st = self.state.get(key, {})
-            speed = throttle * 10.0
-            st["speed"] = speed
-            st["x"] = st.get("x", 0.0) + speed * dt
-            self.state[key] = st
+class AwsimSimulator(Node):
+    """Bridge between Scenic and AWSim via ROS2."""
+    def __init__(self):
+        super().__init__("awsim_scenic_interface")
 
-            # TO-DO (Graeme): send throttle/steering/etc. to AWSIM/AUTOWARE via ROS2.
-            print(
-                f"[AwsimSimulator] Applying controls to '{key}' "
-                f"(awsim_id={handle.awsim_id}): throttle={throttle}, steering={steering}"
-            )
-            
-            print(
-                f"[AwsimSimulator] New dummy state for '{key}': "
-                f"x={st['x']:.2f}, y={st.get('y', 0.0):.2f}, "
-                f"heading_deg={st.get('heading_deg', 0.0):.1f}, speed={st['speed']:.2f}"
-            )
+        # Sim time from /clock (simulated time)
+        self.sim_time = Time(sec=0, nanosec=0)
 
-        # Part 2) Step the AWSIM simulation forward by dt.
-        # TO-DO (Graeme): call AWSIM to advance simulation time by dt.
-        print(f"[AwsimSimulator] Stepping simulation by dt={dt} seconds (dummy)")
+        cmd_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
-        # Part 3) After stepping, AWSIM will have updated states for each object.
-        # TO-DO (Graeme): read and cache updated state from AWSIM.
-    
-    # Query the latest known state for an object from AWSIM (Graeme: Replace placeholder with ROS2 callbacks/calls to AWSIM)
-    # Returns a dictionary like: {"x": 10.0,"y": 5.0,"z": 0.0, "heading degree": 90.0,"speed": 3.0}
-    def get_object_state(self, key: str) -> Dict[str, Any]:
-        
-        if key not in self.objects:
-            raise ValueError(f"Unknown object key '{key}'")
+        # Publishers for Autoware/AWSim control inputs
+        self.control_pub = self.create_publisher(
+            Control, "/control/command/control_cmd", cmd_qos
+        )
+        self.gear_pub = self.create_publisher(
+            GearCommand, "/control/command/gear_cmd", cmd_qos
+        )
 
-        handle = self.objects[key]
-        st = self.state.get(key, {})
+        vel_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+        )
 
-        # TO-DO (Graeme): query AWSIM or return cached state.
-        # For now we just return dummy values for testing.
-        state = {
-            "x": st.get("x", 0.0),
-            "y": st.get("y", 0.0),
-            "z": 0.0,
-            "heading_deg": st.get("heading_deg", 0.0),
-            "speed": st.get("speed", 0.0),
-            "awsim_id": handle.awsim_id,
-            "kind": handle.kind,
+        # Subscribers for AWSim ego Velocity
+        self._last_velocity_report: VelocityReport | None = None
+        self.velocity_sub = self.create_subscription(
+            VelocityReport,
+            "/vehicle/status/velocity_status",
+            self._velocity_status_callback,
+            vel_qos,
+        )
+
+        pose_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE
+        )
+
+        # Subscribers for AWSim ego position
+        self.pose_sub = self.create_subscription(
+            PoseStamped,
+            "/sensing/gnss/pose",
+            self._pose_callback,
+            pose_qos
+        )
+
+        # Subscribe to /clock so we can time-stamp messages correctly
+        self.create_subscription(Clock, "/clock", self._clock_callback, 10)
+
+        # Immediately put the vehicle into DRIVE
+        gear = GearCommand()
+        gear.command = GearCommand.DRIVE
+        gear.stamp = self._now()
+        self.gear_pub.publish(gear)
+
+        # Internal object storage
+        self.objects = {}
+        self._counter = 0
+
+        self.get_logger().info("AwsimSimulator ready (control publishers online).")
+
+    # -------------------------------------------------------
+    # Time handling
+    # -------------------------------------------------------
+    def _clock_callback(self, msg: Clock):
+        self.sim_time = msg.clock
+
+    def _now(self):
+        # Use simulation time from AWSim
+        return self.sim_time
+
+    # -------------------------------------------------------
+    # Velocity status subscription
+    # -------------------------------------------------------
+    def _velocity_status_callback(self, msg: VelocityReport) -> None:
+        """Callback for /vehicle/status/velocity_status."""
+        self._last_velocity_report = msg
+
+    def get_current_velocity(self):
+        """Return the most recent velocity as a simple dict.
+
+        {
+            "longitudinal": float m/s,
+            "lateral":      float m/s,
+            "heading_rate": float rad/s
+        }
+        """
+        if self._last_velocity_report is None:
+            return {
+                "longitudinal": 0.0,
+                "lateral": 0.0,
+                "heading_rate": 0.0,
+            }
+
+        rep = self._last_velocity_report
+        return {
+            "longitudinal": rep.longitudinal_velocity,
+            "lateral": rep.lateral_velocity,
+            "heading_rate": rep.heading_rate,
         }
 
-        print(f"[AwsimSimulator] get_object_state('{key}') -> {state}")
-        return state
-    
-    # Return state for all registered objects (Graeme: Make sure this matches how AWSIM publishes multi-vehicle states)
-    def get_all_states(self) -> Dict[str, Dict[str, Any]]:
-        
-        return {key: self.get_object_state(key) for key in self.objects.keys()}
-    
-    # Clean up AWSIM connection and despawn all objects (Graeme: Implement ROS2 node shutdown/teardown)
-    def shutdown(self) -> None:
-        
-        for key in list(self.objects.keys()):
-            self.remove_object(key)
+    # -------------------------------------------------------
+    # Pose subscription
+    # -------------------------------------------------------
+ 
+    def _pose_callback(self, msg):
+        """Callback for /sensing/gnss/pose"""
+        self._last_pose = msg
 
-        # TO-DO (Graeme): shutdown ROS2/AWSIM resources if needed.
-        print("[AwsimSimulator] Shutdown complete")
+    def get_current_pose(self):
+        """Return the latest known vehicle position and orientation from GNSS pose."""
+        if not hasattr(self, "_last_pose") or self._last_pose is None:
+            return None
+        
+        msg = self._last_pose
+
+        if hasattr(msg, "pose"):
+            pose = msg.pose
+        else:
+            pose = msg
+
+        return {
+            "position": {
+                "x": pose.position.x,
+                "y": pose.position.y,
+                "z": pose.position.z,
+            }
+        }
+
+    # -------------------------------------------------------
+    # Scenic compatibility: register object from Scenic Scene
+    # -------------------------------------------------------
+    def register_object(self, name, kind="vehicle"):
+        awsim_id = f"awsim_{name}"
+        handle = AwsimObjectHandle(name, awsim_id, kind)
+        self.objects[name] = handle
+
+        self.get_logger().info(
+            f"[AwsimSimulator] Registered object '{name}' as {handle}"
+        )
+        return handle
+
+    # -------------------------------------------------------
+    # Control Application
+    # -------------------------------------------------------
+    def apply_controls(self, name, throttle, steering, acceleration=None):
+        """
+        Apply controls for a Scenic object.
+
+        Parameters
+        ----------
+        name : str
+            Scenic object name (e.g., "ego").
+        throttle : float
+            Interpreted as desired *speed* from Scenic (e.g., scene.params.egoSpeed).
+            Units should match what AWSim expects (m/s).
+        steering : float
+            Steering tire angle (radians).
+        acceleration : float | None
+            Optional acceleration command from Scenic (e.g., scene.params.egoAccel).
+            If None, we use a default that preserves previous behavior.
+        """
+        if name not in self.objects:
+            raise KeyError(f"No object named '{name}' registered.")
+
+        handle = self.objects[name]
+        handle.throttle = float(throttle)
+        handle.steering = float(steering)
+
+        msg = Control()
+        msg.stamp = self._now()
+
+        # LATERAL (steering) --------------------
+        msg.lateral.steering_tire_angle = float(steering)
+        msg.lateral.is_defined_steering_tire_rotation_rate = False
+
+        # LONGITUDINAL --------------------------
+        # Scenic "throttle" is really desired speed from the scenario
+        msg.longitudinal.velocity = float(throttle)
+
+        accel = float(acceleration)
+
+        msg.longitudinal.acceleration = accel
+        msg.longitudinal.is_defined_acceleration = False
+
+        msg.longitudinal.jerk = 0.0
+        msg.longitudinal.is_defined_jerk = False
+
+        self.control_pub.publish(msg)
+
+    # -------------------------------------------------------
+    # Simulation Step (Scenic expects this hook)
+    # -------------------------------------------------------
+    def step(self, dt, controls):
+        """
+        Scenic calls this once per timestep.
+        We simply publish controls to AWSim.
+
+        `controls` is a dict mapping object name → { "throttle", "steer", "accel"? }.
+        """
+        for name, ctrl in controls.items():
+            throttle = ctrl.get("throttle", 0.0)
+            steer = ctrl.get("steer", 0.0)
+            accel = ctrl.get("accel", None)
+            self.apply_controls(name, throttle, steer, accel)
+
+        return {}  # Scenic expects a dict
+
+    # -------------------------------------------------------
+    # Scenic convenience API
+    # -------------------------------------------------------
+    def get_object_state(self, name):
+        """Return state from AWSim."""
+        return {
+            "awsim_id": self.objects[name].awsim_id,
+            "kind": self.objects[name].kind,
+            "current_position": self.get_current_pose(),
+            "current_velocity": self.get_current_velocity(),
+        }
+
+    # -------------------------------------------------------
+    # Cleanup
+    # -------------------------------------------------------
+    def destroy(self):
+        """Explicit cleanup."""
+        for name in list(self.objects.keys()):
+            handle = self.objects[name]
+            self.get_logger().info(
+                f"[AwsimSimulator] Removed object '{name}' (awsim_id={handle.awsim_id})"
+            )
+        self.objects.clear()

@@ -19,6 +19,10 @@ Install Scenic:
 pip install scenic
 ```
 
+Install AWsim
+Follow setup instructions as provided from AWSim
+https://autowarefoundation.github.io/AWSIM-Labs/pr-59/GettingStarted/SetupUnityProject/
+
 I used `venv`.
 
 ------------------------------------------------------------------------
@@ -62,13 +66,10 @@ python -m awsim.interface.scenic_driver
 2.  Samples a Scenic scene containing:
 
     -   One **ego vehicle** at the origin
-    -   Two **NPC vehicles** positioned behind the ego
 
 3.  Registers each Scenic object into the simulator:
 
     -   `ego`
-    -   `npc1`
-    -   `npc2`
 
 4.  Runs a short simulation loop (\~5 steps):
 
@@ -99,9 +100,6 @@ Run from the **repository root**:
 ``` bash
 # Scenic driver import / wiring test
 python -m awsim.tests.test_scenic_driver
-
-# AWSIM mock simulator test
-python -m awsim.tests.test_awsim_simulator
 ```
 
 ### These Tests Verify
@@ -122,7 +120,7 @@ python -m awsim.tests.test_awsim_simulator
 -   `load_scenic_scene(filename="minimal.scenic")`
     -   Loads a Scenic file and samples a scene
 -   `register_scene_objects(sim, scene)`
-    -   Assigns keys (`ego`, `npc1`, `npc2`, ...)
+    -   Assigns keys (`ego`,  ...)
     -   Registers each object into the simulator
 -   `simple_control_policy(step_index)`
     -   Provides throttle + steering commands
@@ -167,13 +165,12 @@ Stores:
 Defines:
 
 -   One ego vehicle at `(0, 0)`
--   Two NPC vehicles behind the ego
 -   Shared heading + forward motion
 
 Used to validate:
 
 -   Scene sampling
--   Multi-agent registration
+-   Agent registration
 -   Control + state propagation
 
 ------------------------------------------------------------------------
